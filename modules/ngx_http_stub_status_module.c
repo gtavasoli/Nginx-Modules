@@ -79,6 +79,15 @@ static ngx_http_variable_t  ngx_http_stub_status_vars[] = {
       ngx_http_null_variable
 };
 
+// Output format (plain text or json)
+typedef enum ngx_http_stub_output_mode{
+    Plain,
+    JSON
+} ngs_out_mode;
+
+// ToDo: Read from configuration file
+ngs_out_mode ngsom = JSON;
+
 
 static ngx_int_t
 ngx_http_stub_status_handler(ngx_http_request_t *r)
@@ -99,8 +108,12 @@ ngx_http_stub_status_handler(ngx_http_request_t *r)
         return rc;
     }
 
-    r->headers_out.content_type_len = sizeof("text/plain") - 1;
-    ngx_str_set(&r->headers_out.content_type, "text/plain");
+    r->headers_out.content_type_len = sizeof(ngsom == Plain ? "text/plain" : "application/json") - 1;
+    if(ngsom == Plain) {
+        ngx_str_set(&r->headers_out.content_type, "text/plain");
+    } else {
+        ngx_str_set(&r->headers_out.content_type, "application/json");
+    }
     r->headers_out.content_type_lowcase = NULL;
 
     if (r->method == NGX_HTTP_HEAD) {
@@ -113,10 +126,15 @@ ngx_http_stub_status_handler(ngx_http_request_t *r)
         }
     }
 
-    size = sizeof("Active connections:  \n") + NGX_ATOMIC_T_LEN
+    if(ngsom == Plain) {
+        size = sizeof("Active connections:  \n") + NGX_ATOMIC_T_LEN
            + sizeof("server accepts handled requests\n") - 1
            + 6 + 3 * NGX_ATOMIC_T_LEN
            + sizeof("Reading:  Writing:  Waiting:  \n") + 3 * NGX_ATOMIC_T_LEN;
+    } else {    // JSON
+        size = sizeof("{\"version\":\"0.1\",\"active_connection\":,\"requests\":{\"server\":,\"accept\":,\"handeled\":},\"queue\":{\"reading\":,\"writing\":,\"waiting\":}}")
+            + 7 * NGX_ATOMIC_T_LEN;
+    }
 
     b = ngx_create_temp_buf(r->pool, size);
     if (b == NULL) {
@@ -134,15 +152,21 @@ ngx_http_stub_status_handler(ngx_http_request_t *r)
     wr = *ngx_stat_writing;
     wa = *ngx_stat_waiting;
 
-    b->last = ngx_sprintf(b->last, "Active connections: %uA \n", ac);
+    if(ngsom == Plain) {
+        b->last = ngx_sprintf(b->last, "Active connections: %uA \n", ac);
 
-    b->last = ngx_cpymem(b->last, "server accepts handled requests\n",
-                         sizeof("server accepts handled requests\n") - 1);
+        b->last = ngx_cpymem(b->last, "server accepts handled requests\n",
+                            sizeof("server accepts handled requests\n") - 1);
 
-    b->last = ngx_sprintf(b->last, " %uA %uA %uA \n", ap, hn, rq);
+        b->last = ngx_sprintf(b->last, " %uA %uA %uA \n", ap, hn, rq);
 
-    b->last = ngx_sprintf(b->last, "Reading: %uA Writing: %uA Waiting: %uA \n",
-                          rd, wr, wa);
+        b->last = ngx_sprintf(b->last, "Reading: %uA Writing: %uA Waiting: %uA \n",
+                            rd, wr, wa);
+    } else {
+        b->last= ngx_sprintf(b->last, "{\"version\":\"0.1\",\"active_connection\":%uA,\"requests\":{\"server\":%uA,\"accept\":%uA,\"handeled\":%uA},\"queue\":{\"reading\":%uA,\"writing\":%uA,\"waiting\":%uA}}",
+            ac, ap, hn, rq, rd, wr, wa);
+    }
+    
 
     r->headers_out.status = NGX_HTTP_OK;
     r->headers_out.content_length_n = b->last - b->pos;
